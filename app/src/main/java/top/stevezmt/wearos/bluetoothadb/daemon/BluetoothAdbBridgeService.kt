@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.CoroutineScope
@@ -18,14 +19,20 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 class BluetoothAdbBridgeService : Service() {
     private val prefs by lazy { BridgePreferences(this) }
     private val notificationManager by lazy { NotificationManagerCompat.from(this) }
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val operationMutex = Mutex()
 
     private var controller: BluetoothBridgeController? = null
+    private var stopJob: kotlinx.coroutines.Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -46,38 +53,58 @@ class BluetoothAdbBridgeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return when (intent?.action) {
             ACTION_STOP -> {
-                stopBridge()
-                stopSelf()
+                requestStopBridge(force = false)
+                START_NOT_STICKY
+            }
+
+            ACTION_FORCE_STOP -> {
+                forceStopBridge()
                 START_NOT_STICKY
             }
 
             ACTION_START -> {
                 val config = parseConfig(intent)
                 if (config == null) {
-                    stopSelf()
+                    requestStopBridge(force = true)
                     START_NOT_STICKY
                 } else {
-                    startBridge(config)
+                    serviceScope.launch {
+                        operationMutex.withLock {
+                            if (BridgeStateStore.state.value.serviceStatus == ServiceStatus.STOPPING) {
+                                return@withLock
+                            }
+                            startBridge(config)
+                        }
+                    }
                     START_STICKY
                 }
             }
 
             else -> {
-                restoreBridgeIfNeeded()
+                serviceScope.launch {
+                    operationMutex.withLock {
+                        restoreBridgeIfNeeded()
+                    }
+                }
                 START_STICKY
             }
         }
     }
 
     override fun onDestroy() {
+        stopJob?.cancel()
+        stopJob = null
         controller?.stop()
         controller = null
         serviceScope.cancel()
         super.onDestroy()
     }
 
-    private fun restoreBridgeIfNeeded() {
+    private suspend fun restoreBridgeIfNeeded() {
         if (controller != null) {
+            return
+        }
+        if (BridgeStateStore.state.value.serviceStatus == ServiceStatus.STOPPING) {
             return
         }
         val config = prefs.loadConfig()
@@ -100,38 +127,102 @@ class BluetoothAdbBridgeService : Service() {
         )
     }
 
-    private fun startBridge(config: BridgeConfig) {
+    private suspend fun startBridge(config: BridgeConfig) {
+        Log.i(TAG, "start service bridge device=${config.deviceName} tcp=${if (config.exposeTcp) config.tcpPort else "disabled"}")
+        stopJob?.cancel()
+        stopJob = null
+        controller?.let { existing ->
+            BridgeStateStore.update {
+                it.copy(
+                    running = true,
+                    serviceStatus = ServiceStatus.STOPPING,
+                    config = config,
+                )
+            }
+            withControllerStop(existing)
+        }
+        controller = null
+
         prefs.saveConfig(config)
         prefs.setKeepRunning(true)
 
         BridgeStateStore.update {
             BridgeUiState(
                 running = true,
+                serviceStatus = ServiceStatus.STARTING,
                 config = config,
                 hostState = EndpointState(),
-                targetState = EndpointState(EndpointStatus.CONNECTING, "蓝牙握手"),
+                targetState = EndpointState(EndpointStatus.CONNECTING, getString(R.string.endpoint_detail_bluetooth_handshake)),
                 phoneIpAddresses = if (config.exposeTcp) NetworkAddressHelper.ipv4Addresses() else emptyList(),
                 lastError = null,
             )
         }
 
         startForegroundCompat(buildNotification(BridgeStateStore.state.value))
-
-        controller?.stop()
         controller = BluetoothBridgeController(applicationContext, config).also { it.start() }
     }
 
-    private fun stopBridge() {
+    private fun requestStopBridge(force: Boolean) {
+        if (force) {
+            forceStopBridge()
+            return
+        }
+        if (stopJob?.isActive == true) {
+            return
+        }
+        Log.i(TAG, "request async stop bridge")
         prefs.setKeepRunning(false)
+        if (BridgeStateStore.state.value.running || controller != null) {
+            BridgeStateStore.update {
+                it.copy(
+                    running = true,
+                    serviceStatus = ServiceStatus.STOPPING,
+                    lastError = null,
+                )
+            }
+        }
+        val existing = controller
+        if (existing == null) {
+            finalizeStoppedState()
+            stopSelf()
+            return
+        }
+        stopJob = serviceScope.launch {
+            try {
+                operationMutex.withLock {
+                    val stopped = withTimeoutOrNull(STOP_JOIN_TIMEOUT_MS) {
+                        withControllerStop(existing)
+                    } != null
+                    if (stopped) {
+                        controller = null
+                        finalizeStoppedState()
+                        stopSelf()
+                    } else {
+                        Log.w(TAG, "stop service bridge timed out")
+                        BridgeStateStore.update {
+                            it.copy(
+                                running = true,
+                                serviceStatus = ServiceStatus.STOPPING,
+                                lastError = getString(R.string.service_stop_timeout),
+                            )
+                        }
+                    }
+                }
+            } finally {
+                stopJob = null
+            }
+        }
+    }
+
+    private fun forceStopBridge() {
+        Log.w(TAG, "force stop service bridge")
+        prefs.setKeepRunning(false)
+        stopJob?.cancel()
+        stopJob = null
         controller?.stop()
         controller = null
-        BridgeStateStore.reset(prefs.loadConfig())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
+        finalizeStoppedState()
+        stopSelf()
     }
 
     private fun startForegroundCompat(notification: Notification) {
@@ -149,13 +240,15 @@ class BluetoothAdbBridgeService : Service() {
 
     private fun buildNotification(state: BridgeUiState): Notification {
         val config = state.config
-        val serviceLine = when {
-            !state.running -> getString(R.string.service_stopped)
-            !state.lastError.isNullOrBlank() -> getString(R.string.service_fault)
-            else -> getString(R.string.service_running)
+        val serviceLine = when (state.serviceStatus) {
+            ServiceStatus.STOPPED -> getString(R.string.service_stopped)
+            ServiceStatus.STARTING -> getString(R.string.service_starting)
+            ServiceStatus.RUNNING -> getString(R.string.service_running)
+            ServiceStatus.STOPPING -> getString(R.string.service_stopping)
+            ServiceStatus.FAULT -> getString(R.string.service_fault)
         }
-        val hostLine = state.hostState.render("主机")
-        val targetLine = state.targetState.render("目标")
+        val hostLine = state.hostState.render(this, getString(R.string.host_label))
+        val targetLine = state.targetState.render(this, getString(R.string.target_label))
         val tcpLine = when {
             config == null -> getString(R.string.notification_tcp_disabled)
             !config.exposeTcp -> getString(R.string.notification_tcp_disabled)
@@ -213,9 +306,31 @@ class BluetoothAdbBridgeService : Service() {
         manager?.createNotificationChannel(channel)
     }
 
+    private suspend fun withControllerStop(existing: BluetoothBridgeController?) {
+        if (existing == null) {
+            return
+        }
+        withContext(Dispatchers.IO) {
+            existing.stopAndJoin()
+        }
+    }
+
+    private fun finalizeStoppedState() {
+        BridgeStateStore.reset(prefs.loadConfig())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+    }
+
     companion object {
+        private const val TAG = "BtAdbService"
+        private const val STOP_JOIN_TIMEOUT_MS = 3_000L
         const val ACTION_START = "top.stevezmt.wearos.bluetoothadb.daemon.action.START"
         const val ACTION_STOP = "top.stevezmt.wearos.bluetoothadb.daemon.action.STOP"
+        const val ACTION_FORCE_STOP = "top.stevezmt.wearos.bluetoothadb.daemon.action.FORCE_STOP"
 
         const val EXTRA_DEVICE_ADDRESS = "extra_device_address"
         const val EXTRA_DEVICE_NAME = "extra_device_name"
@@ -251,6 +366,14 @@ class BluetoothAdbBridgeService : Service() {
             context.startService(
                 Intent(context, BluetoothAdbBridgeService::class.java).apply {
                     action = ACTION_STOP
+                },
+            )
+        }
+
+        fun forceStop(context: Context) {
+            context.startService(
+                Intent(context, BluetoothAdbBridgeService::class.java).apply {
+                    action = ACTION_FORCE_STOP
                 },
             )
         }

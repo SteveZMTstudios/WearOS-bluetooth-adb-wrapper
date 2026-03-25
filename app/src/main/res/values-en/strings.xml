@@ -30,7 +30,7 @@
     <string name="no_paired_devices">No paired Bluetooth devices found</string>
     <string name="unnamed_device">Unnamed Device</string>
     <string name="bluetooth_not_supported">Bluetooth is not supported on this phone</string>
-    <string name="permission_required_for_devices">[Please grant Nearby Devices permission first]</string>
+    <string name="permission_required_for_devices">【Please grant Nearby Devices permission first】</string>
     <string name="permission_ready">Permissions ready, connection available</string>
     <string name="permission_missing">Missing %1$s permission</string>
     <string name="permission_denied_message">Permission not granted, cannot continue Bluetooth bridge.</string>
@@ -41,8 +41,8 @@
     <string name="tcp_port_invalid">Please enter a port between 1 and 65535</string>
     <string name="tcp_disabled">Disabled</string>
     <string name="tcp_waiting_for_network">Waiting for network, preparing to listen on 0.0.0.0:%1$d</string>
-    <string name="instructions_classic_title">&gt; Traditional Wired Connection</string>
-    <string name="instructions_tcp_title">&gt; LAN Wireless Method</string>
+    <string name="instructions_classic_title">> Traditional Wired Connection</string>
+    <string name="instructions_tcp_title">> LAN Wireless Method</string>
     <string name="endpoint_copy">Copy Endpoint Info</string>
     <string name="instructions_copy">Copy Connection Commands</string>
     <string name="copied_to_clipboard">Copied to clipboard</string>

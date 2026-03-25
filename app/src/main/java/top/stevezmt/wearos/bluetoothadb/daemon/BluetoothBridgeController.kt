@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.net.LocalServerSocket
 import android.net.LocalSocket
 import android.os.Build
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -52,26 +53,34 @@ class BluetoothBridgeController(
     private var localServerSocket: LocalServerSocket? = null
     private var tcpServerSocket: ServerSocket? = null
     private var currentTargetSocket: BluetoothSocket? = null
+    private var currentHostConnection: HostConnection? = null
 
     fun start() {
         if (bridgeJob != null) {
             return
         }
         stopRequested.set(false)
+        Log.i(TAG, "start bridge device=${config.deviceName} address=${config.deviceAddress} tcp=${if (config.exposeTcp) config.tcpPort else "disabled"}")
         bridgeJob = scope.launch {
             runBridgeLoop()
         }
     }
 
     fun stop() {
-        stopRequested.set(true)
-        bridgeJob?.cancel()
+        requestStop()
+    }
+
+    suspend fun stopAndJoin() {
+        Log.i(TAG, "stop bridge requested join=true")
+        val jobsToJoin = requestStop()
+        jobsToJoin.forEach { job ->
+            try {
+                job.join()
+            } catch (_: CancellationException) {
+            }
+        }
         bridgeJob = null
-        closeHostAcceptors()
-        closeQuietly(currentTargetSocket)
-        currentTargetSocket = null
-        closePendingHosts()
-        scope.cancel()
+        Log.i(TAG, "stop bridge completed")
     }
 
     private suspend fun runBridgeLoop() {
@@ -82,9 +91,11 @@ class BluetoothBridgeController(
             try {
                 targetSocket = connectTarget(device)
                 currentTargetSocket = targetSocket
+                Log.i(TAG, "target connected device=${config.deviceName}")
                 BridgeStateStore.update {
                     it.copy(
                         running = true,
+                        serviceStatus = ServiceStatus.RUNNING,
                         config = config,
                         targetState = EndpointState(EndpointStatus.CONNECTED, config.deviceName),
                         hostState = EndpointState(),
@@ -95,20 +106,26 @@ class BluetoothBridgeController(
 
                 startHostAcceptors()
                 hostConnection = hostQueue.receive()
+                currentHostConnection = hostConnection
+                Log.i(TAG, "host connected transport=${hostConnection.transportLabel}")
                 BridgeStateStore.update {
                     it.copy(
+                        serviceStatus = ServiceStatus.RUNNING,
                         hostState = EndpointState(EndpointStatus.CONNECTED, hostConnection.transportLabel),
                         lastError = null,
                     )
                 }
                 pipeTraffic(hostConnection, targetSocket)
             } catch (cancelled: CancellationException) {
+                Log.i(TAG, "bridge loop cancelled")
                 throw cancelled
             } catch (error: Throwable) {
                 if (scope.isActive) {
+                    Log.w(TAG, "bridge loop error: ${readableError(error)}", error)
                     BridgeStateStore.update {
                         it.copy(
                             running = true,
+                            serviceStatus = ServiceStatus.FAULT,
                             config = config,
                             hostState = EndpointState(),
                             targetState = EndpointState(EndpointStatus.ERROR, error.message ?: error.javaClass.simpleName),
@@ -119,9 +136,13 @@ class BluetoothBridgeController(
                     delay(RETRY_DELAY_MS)
                 }
             } finally {
+                Log.d(TAG, "bridge loop cleanup")
                 hostReserved.set(false)
                 closeHostAcceptors()
                 closeQuietly(hostConnection)
+                if (currentHostConnection === hostConnection) {
+                    currentHostConnection = null
+                }
                 closeQuietly(targetSocket)
                 currentTargetSocket = null
                 closePendingHosts()
@@ -129,6 +150,11 @@ class BluetoothBridgeController(
                     BridgeStateStore.update {
                         it.copy(
                             running = true,
+                            serviceStatus = when (it.serviceStatus) {
+                                ServiceStatus.FAULT -> ServiceStatus.FAULT
+                                ServiceStatus.STOPPING -> ServiceStatus.STOPPING
+                                else -> ServiceStatus.RUNNING
+                            },
                             config = config,
                             hostState = EndpointState(),
                             targetState = EndpointState(),
@@ -146,25 +172,27 @@ class BluetoothBridgeController(
             BridgeStateStore.update {
                 it.copy(
                     running = true,
+                    serviceStatus = ServiceStatus.FAULT,
                     config = config,
-                    targetState = EndpointState(EndpointStatus.ERROR, "手机不支持蓝牙"),
-                    lastError = "手机没有可用的蓝牙适配器。",
+                    targetState = EndpointState(EndpointStatus.ERROR, context.getString(R.string.error_no_bluetooth_adapter_short)),
+                    lastError = context.getString(R.string.error_no_bluetooth_adapter),
                 )
             }
             return null
         }
         return try {
             if (!hasBluetoothConnectPermission()) {
-                throw SecurityException("缺少蓝牙连接权限")
+                throw SecurityException(context.getString(R.string.error_missing_bluetooth_connect_permission))
             }
             adapter.getRemoteDevice(config.deviceAddress)
         } catch (error: IllegalArgumentException) {
             BridgeStateStore.update {
                 it.copy(
                     running = true,
+                    serviceStatus = ServiceStatus.FAULT,
                     config = config,
-                    targetState = EndpointState(EndpointStatus.ERROR, "设备地址无效"),
-                    lastError = "无法解析蓝牙地址 ${config.deviceAddress}。",
+                    targetState = EndpointState(EndpointStatus.ERROR, context.getString(R.string.error_invalid_device_address_short)),
+                    lastError = context.getString(R.string.error_invalid_device_address, config.deviceAddress),
                 )
             }
             null
@@ -172,21 +200,26 @@ class BluetoothBridgeController(
     }
 
     private suspend fun connectTarget(device: BluetoothDevice): BluetoothSocket {
-        val adapter = bluetoothAdapter ?: throw IllegalStateException("蓝牙适配器不可用")
+        val adapter = bluetoothAdapter ?: throw IllegalStateException(context.getString(R.string.error_bluetooth_adapter_unavailable))
         while (scope.isActive) {
             BridgeStateStore.update {
                 it.copy(
                     running = true,
+                    serviceStatus = when (it.serviceStatus) {
+                        ServiceStatus.STOPPING -> ServiceStatus.STOPPING
+                        ServiceStatus.RUNNING, ServiceStatus.FAULT -> it.serviceStatus
+                        else -> ServiceStatus.STARTING
+                    },
                     config = config,
                     targetState = EndpointState(EndpointStatus.CONNECTING, config.deviceName),
                     hostState = EndpointState(),
                 )
             }
             if (!hasBluetoothConnectPermission()) {
-                throw SecurityException("缺少蓝牙连接权限")
+                throw SecurityException(context.getString(R.string.error_missing_bluetooth_connect_permission))
             }
             if (!hasBluetoothScanPermission()) {
-                throw SecurityException("缺少附近设备权限，无法取消系统蓝牙扫描。")
+                throw SecurityException(context.getString(R.string.error_missing_nearby_devices_permission_scan))
             }
 
             var socket: BluetoothSocket? = null
@@ -195,6 +228,7 @@ class BluetoothBridgeController(
                 adapter.cancelDiscovery()
                 socket = device.createRfcommSocketToServiceRecord(BluetoothAdbBridgeService.ADB_BLUETOOTH_UUID)
                 currentTargetSocket = socket
+                Log.d(TAG, "connecting target device=${config.deviceName} address=${config.deviceAddress}")
                 socket.connect()
                 if (!scope.isActive || stopRequested.get()) {
                     closeQuietly(socket)
@@ -207,11 +241,12 @@ class BluetoothBridgeController(
                 if (!scope.isActive || stopRequested.get()) {
                     throw CancellationException("bridge stopped")
                 }
+                Log.w(TAG, "target connect failed: ${readableError(error)}")
                 BridgeStateStore.update {
                     it.copy(
                         running = true,
                         config = config,
-                        targetState = EndpointState(EndpointStatus.ERROR, "握手失败"),
+                        targetState = EndpointState(EndpointStatus.ERROR, context.getString(R.string.error_handshake_failed)),
                         lastError = readableError(error),
                     )
                 }
@@ -239,56 +274,74 @@ class BluetoothBridgeController(
 
     private suspend fun acceptLocalHosts() {
         while (scope.isActive) {
+            var server: LocalServerSocket? = null
             try {
-                val server = LocalServerSocket(BluetoothAdbBridgeService.LOCAL_SOCKET_NAME)
+                server = LocalServerSocket(BluetoothAdbBridgeService.LOCAL_SOCKET_NAME)
                 localServerSocket = server
-                val socket = server.accept()
-                if (!isAllowedLocalPeer(socket)) {
-                    closeQuietly(socket)
-                    continue
+                Log.i(TAG, "local adb-hub listening name=${BluetoothAdbBridgeService.LOCAL_SOCKET_NAME}")
+                clearRuntimeError()
+                while (scope.isActive && !stopRequested.get()) {
+                    val socket = server.accept()
+                    if (!isAllowedLocalPeer(socket)) {
+                        closeQuietly(socket)
+                        continue
+                    }
+                    Log.i(TAG, "local host accepted")
+                    offerHost(LocalHostConnection(socket))
                 }
-                offerHost(LocalHostConnection(socket))
             } catch (error: IOException) {
-                if (scope.isActive) {
+                if (scope.isActive && !stopRequested.get()) {
+                    Log.w(TAG, "local host accept failed: ${readableError(error)}")
                     BridgeStateStore.update {
                         it.copy(lastError = readableError(error))
                     }
                     delay(RETRY_DELAY_MS)
                 }
             } finally {
-                closeQuietly(localServerSocket)
-                localServerSocket = null
+                closeQuietly(server)
+                if (localServerSocket === server) {
+                    localServerSocket = null
+                }
             }
         }
     }
 
     private suspend fun acceptTcpHosts() {
         while (scope.isActive) {
+            var server: ServerSocket? = null
             try {
-                val server = ServerSocket().apply {
-                    reuseAddress = true
-                    bind(InetSocketAddress(config.tcpPort))
-                }
+                server = ServerSocket()
                 tcpServerSocket = server
-                val socket = server.accept()
-                offerHost(TcpHostConnection(socket, config.tcpPort))
+                server.reuseAddress = true
+                server.bind(InetSocketAddress(config.tcpPort))
+                Log.i(TAG, "tcp host listening port=${config.tcpPort}")
+                clearRuntimeError()
+                while (scope.isActive && !stopRequested.get()) {
+                    val socket = server.accept()
+                    Log.i(TAG, "tcp host accepted remote=${socket.inetAddress?.hostAddress}:${socket.port}")
+                    offerHost(TcpHostConnection(socket, config.tcpPort))
+                }
             } catch (error: BindException) {
-                if (scope.isActive) {
+                if (scope.isActive && !stopRequested.get()) {
+                    Log.w(TAG, "tcp bind failed port=${config.tcpPort}: ${readableError(error)}")
                     BridgeStateStore.update {
-                        it.copy(lastError = "TCP ${config.tcpPort} 端口已被占用。")
+                        it.copy(lastError = context.getString(R.string.error_tcp_port_in_use, config.tcpPort))
                     }
                     delay(RETRY_DELAY_MS)
                 }
             } catch (error: IOException) {
-                if (scope.isActive) {
+                if (scope.isActive && !stopRequested.get()) {
+                    Log.w(TAG, "tcp host accept failed: ${readableError(error)}")
                     BridgeStateStore.update {
                         it.copy(lastError = readableError(error))
                     }
                     delay(RETRY_DELAY_MS)
                 }
             } finally {
-                closeQuietly(tcpServerSocket)
-                tcpServerSocket = null
+                closeQuietly(server)
+                if (tcpServerSocket === server) {
+                    tcpServerSocket = null
+                }
             }
         }
     }
@@ -381,18 +434,50 @@ class BluetoothBridgeController(
 
     private fun readableError(error: Throwable): String {
         return when (error) {
-            is SecurityException -> error.message ?: "系统拒绝了蓝牙访问请求。"
+            is SecurityException -> error.message ?: context.getString(R.string.error_bluetooth_access_denied)
             is SocketException -> {
                 if (error.message.equals("Socket closed", ignoreCase = true)) {
-                    "连接已关闭。"
+                    context.getString(R.string.error_connection_closed)
                 } else {
-                    error.message ?: "套接字已关闭。"
+                    error.message ?: context.getString(R.string.error_socket_closed)
                 }
             }
 
-            is IOException -> error.message ?: "I/O 读写失败。"
+            is IOException -> error.message ?: context.getString(R.string.error_io_failed)
             else -> error.message ?: error.javaClass.simpleName
         }
+    }
+
+    private fun clearRuntimeError() {
+        Log.d(TAG, "clear runtime error")
+        BridgeStateStore.update {
+            it.copy(
+                serviceStatus = if (it.serviceStatus == ServiceStatus.STOPPING) {
+                    ServiceStatus.STOPPING
+                } else {
+                    ServiceStatus.RUNNING
+                },
+                lastError = null,
+                phoneIpAddresses = if (config.exposeTcp) NetworkAddressHelper.ipv4Addresses() else emptyList(),
+            )
+        }
+    }
+
+    private fun requestStop(): List<Job> {
+        Log.i(TAG, "stop bridge requested join=false")
+        stopRequested.set(true)
+        hostReserved.set(false)
+        val jobsToJoin = listOfNotNull(bridgeJob, localAcceptJob, tcpAcceptJob).distinct()
+        bridgeJob?.cancel()
+        closeHostAcceptors()
+        closeQuietly(currentHostConnection)
+        currentHostConnection = null
+        closeQuietly(currentTargetSocket)
+        currentTargetSocket = null
+        closePendingHosts()
+        scope.cancel()
+        bridgeJob = null
+        return jobsToJoin
     }
 
     private fun isExpectedClosure(error: IOException): Boolean {
@@ -491,6 +576,7 @@ class BluetoothBridgeController(
     }
 
     companion object {
+        private const val TAG = "BtAdbBridge"
         private const val RETRY_DELAY_MS = 2_000L
     }
 }

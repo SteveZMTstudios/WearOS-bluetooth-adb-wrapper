@@ -1,5 +1,8 @@
 package top.stevezmt.wearos.bluetoothadb.daemon
 
+import android.content.Context
+import androidx.annotation.StringRes
+
 data class BridgeConfig(
     val deviceAddress: String,
     val deviceName: String,
@@ -15,25 +18,34 @@ data class BridgeConfig(
     }
 }
 
-enum class EndpointStatus(val label: String) {
-    DISCONNECTED("已断开连接"),
-    CONNECTING("连接中"),
-    CONNECTED("已连接"),
-    ERROR("连接失败"),
+enum class ServiceStatus {
+    STOPPED,
+    STARTING,
+    RUNNING,
+    STOPPING,
+    FAULT,
+}
+
+enum class EndpointStatus(@StringRes val labelResId: Int) {
+    DISCONNECTED(R.string.endpoint_status_disconnected),
+    CONNECTING(R.string.endpoint_status_connecting),
+    CONNECTED(R.string.endpoint_status_connected),
+    ERROR(R.string.endpoint_status_error),
 }
 
 data class EndpointState(
     val status: EndpointStatus = EndpointStatus.DISCONNECTED,
     val detail: String? = null,
 ) {
-    fun render(prefix: String): String {
+    fun render(context: Context, prefix: String): String {
         val suffix = detail?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
-        return "$prefix：${status.label}$suffix"
+        return "$prefix: ${context.getString(status.labelResId)}$suffix"
     }
 }
 
 data class BridgeUiState(
     val running: Boolean = false,
+    val serviceStatus: ServiceStatus = ServiceStatus.STOPPED,
     val config: BridgeConfig? = null,
     val hostState: EndpointState = EndpointState(),
     val targetState: EndpointState = EndpointState(),

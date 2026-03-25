@@ -25,6 +25,7 @@ import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.color.DynamicColors
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import top.stevezmt.wearos.bluetoothadb.daemon.databinding.ActivityMainBinding
@@ -54,6 +55,7 @@ class MainActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        DynamicColors.applyToActivityIfAvailable(this)
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -115,7 +117,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.stopServiceButton.setOnClickListener {
-            BluetoothAdbBridgeService.stop(this)
+            if (BridgeStateStore.state.value.serviceStatus == ServiceStatus.STOPPING) {
+                BluetoothAdbBridgeService.forceStop(this)
+            } else {
+                BluetoothAdbBridgeService.stop(this)
+            }
         }
         binding.exposeTcpSwitch.setOnCheckedChangeListener { _, _ ->
             ensureTcpPortDefault()
@@ -170,12 +176,12 @@ class MainActivity : AppCompatActivity() {
         )
         applyStatusVisual(
             binding.hostStatusValue,
-            state.hostState.render(getString(R.string.host_label)),
+            state.hostState.render(this, getString(R.string.host_label)),
             endpointStatusColorRes(state.hostState.status),
         )
         applyStatusVisual(
             binding.targetStatusValue,
-            state.targetState.render(getString(R.string.target_label)),
+            state.targetState.render(this, getString(R.string.target_label)),
             endpointStatusColorRes(state.targetState.status),
         )
 
@@ -192,6 +198,12 @@ class MainActivity : AppCompatActivity() {
         if (state.running && runningConfig != null) {
             binding.exposeTcpSwitch.isChecked = runningConfig.exposeTcp
             setTcpPortTextIfNeeded(runningConfig.tcpPort)
+        }
+
+        binding.stopServiceButton.text = if (state.serviceStatus == ServiceStatus.STOPPING) {
+            getString(R.string.force_stop_service)
+        } else {
+            getString(R.string.stop_service)
         }
 
         renderTcpPortState()
@@ -397,10 +409,12 @@ class MainActivity : AppCompatActivity() {
     private fun hasRequiredPermissions(): Boolean = missingPermissions().isEmpty()
 
     private fun serviceStatusText(state: BridgeUiState): String {
-        return when {
-            !state.running -> getString(R.string.service_stopped)
-            !state.lastError.isNullOrBlank() -> getString(R.string.service_fault)
-            else -> getString(R.string.service_running)
+        return when (state.serviceStatus) {
+            ServiceStatus.STOPPED -> getString(R.string.service_stopped)
+            ServiceStatus.STARTING -> getString(R.string.service_starting)
+            ServiceStatus.RUNNING -> getString(R.string.service_running)
+            ServiceStatus.STOPPING -> getString(R.string.service_stopping)
+            ServiceStatus.FAULT -> getString(R.string.service_fault)
         }
     }
 
@@ -442,17 +456,19 @@ class MainActivity : AppCompatActivity() {
         selected: DeviceEntry? = selectedDevice(),
     ) {
         val tcpReady = !binding.exposeTcpSwitch.isChecked || validatedTcpPort() != null
-        binding.stopServiceButton.isEnabled = state.running
+        val canStart = state.serviceStatus == ServiceStatus.STOPPED
+        val canStop = state.serviceStatus != ServiceStatus.STOPPED
+        binding.stopServiceButton.isEnabled = canStop
         binding.startServiceButton.isEnabled =
-            !state.running &&
+            canStart &&
             selected?.address?.isNotBlank() == true &&
             hasRequiredPermissions() &&
             tcpReady
-        binding.deviceSpinner.isEnabled = !state.running
-        binding.refreshDevicesButton.isEnabled = !state.running
-        binding.exposeTcpSwitch.isEnabled = !state.running
-        binding.tcpPortInputLayout.isEnabled = !state.running && binding.exposeTcpSwitch.isChecked
-        binding.tcpPortEditText.isEnabled = !state.running && binding.exposeTcpSwitch.isChecked
+        binding.deviceSpinner.isEnabled = canStart
+        binding.refreshDevicesButton.isEnabled = canStart
+        binding.exposeTcpSwitch.isEnabled = canStart
+        binding.tcpPortInputLayout.isEnabled = canStart && binding.exposeTcpSwitch.isChecked
+        binding.tcpPortEditText.isEnabled = canStart && binding.exposeTcpSwitch.isChecked
     }
 
     private fun setEndpointExpanded(expanded: Boolean) {
@@ -513,10 +529,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun serviceStatusColorRes(state: BridgeUiState): Int {
-        return when {
-            !state.running -> R.color.status_stopped
-            !state.lastError.isNullOrBlank() -> R.color.status_error
-            else -> R.color.status_connected
+        return when (state.serviceStatus) {
+            ServiceStatus.STOPPED -> R.color.status_stopped
+            ServiceStatus.STARTING -> R.color.status_connecting
+            ServiceStatus.RUNNING -> R.color.status_connected
+            ServiceStatus.STOPPING -> R.color.status_connecting
+            ServiceStatus.FAULT -> R.color.status_error
         }
     }
 
