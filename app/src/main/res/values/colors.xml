@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="black">#FF000000</color>
+    <color name="status_connected">#2E7D32</color>
+    <color name="status_connecting">#ED6C02</color>
+    <color name="status_disconnected">#5F6368</color>
+    <color name="status_error">#C62828</color>
+    <color name="status_stopped">#C62828</color>
     <color name="white">#FFFFFFFF</color>
 </resources>

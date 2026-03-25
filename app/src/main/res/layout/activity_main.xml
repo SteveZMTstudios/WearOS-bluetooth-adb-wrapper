@@ -201,6 +201,16 @@
                 android:text="@string/endpoint_title"
                 android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
                 android:textStyle="bold" />
+
+            <androidx.appcompat.widget.AppCompatImageButton
+                android:id="@+id/endpointCopyButton"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/endpoint_copy"
+                android:padding="8dp"
+                android:src="@drawable/ic_content_copy"
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <LinearLayout
@@ -263,24 +273,59 @@
             android:layout_marginTop="20dp"
             android:background="?attr/colorOutlineVariant" />
 
-        <TextView
+        <LinearLayout
+            android:id="@+id/instructionsHeader"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
-            android:drawableStart="@drawable/ic_terminal"
-            android:drawablePadding="8dp"
+            android:clickable="true"
+            android:focusable="true"
             android:gravity="center_vertical"
-            android:text="@string/instructions_title"
-            android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
-            android:textStyle="bold" />
+            android:orientation="horizontal"
+            android:paddingVertical="2dp">
 
-        <TextView
-            android:id="@+id/instructionsValue"
+            <ImageView
+                android:id="@+id/instructionsToggleIcon"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:drawableStart="@drawable/ic_terminal"
+                android:drawablePadding="8dp"
+                android:gravity="center_vertical"
+                android:text="@string/instructions_title"
+                android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+                android:textStyle="bold" />
+
+            <androidx.appcompat.widget.AppCompatImageButton
+                android:id="@+id/instructionsCopyButton"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/instructions_copy"
+                android:padding="8dp"
+                android:src="@drawable/ic_content_copy"
+                app:tint="?attr/colorOnSurfaceVariant" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/instructionsContent"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:fontFamily="monospace"
-            android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/instructionsValue"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:fontFamily="monospace"
+                android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/errorTitle"

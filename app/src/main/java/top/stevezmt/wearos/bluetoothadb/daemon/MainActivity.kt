@@ -3,17 +3,24 @@ package top.stevezmt.wearos.bluetoothadb.daemon
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.TextView
 import android.widget.Toast
+import androidx.annotation.ColorRes
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.isVisible
+import androidx.core.widget.TextViewCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -29,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     private var deviceEntries: List<DeviceEntry> = emptyList()
     private var pendingStartAfterPermission = false
     private var isEndpointExpanded = false
+    private var isInstructionsExpanded = false
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -60,6 +68,9 @@ class MainActivity : AppCompatActivity() {
 
         setupUi()
         observeBridgeState()
+        if (savedInstanceState == null) {
+            ensurePermissionsForManualAction(startAfterGrant = false)
+        }
         refreshBondedDevices()
         renderPermissionHint()
         renderTcpPortState()
@@ -74,6 +85,23 @@ class MainActivity : AppCompatActivity() {
         setEndpointExpanded(expanded = false)
         binding.endpointHeader.setOnClickListener {
             setEndpointExpanded(!isEndpointExpanded)
+        }
+        binding.endpointCopyButton.setOnClickListener {
+            copyTextToClipboard(getString(R.string.endpoint_title), endpointClipboardText())
+        }
+        binding.endpointContent.setOnClickListener {
+            copyTextToClipboard(getString(R.string.endpoint_title), endpointClipboardText())
+        }
+
+        setInstructionsExpanded(expanded = false)
+        binding.instructionsHeader.setOnClickListener {
+            setInstructionsExpanded(!isInstructionsExpanded)
+        }
+        binding.instructionsCopyButton.setOnClickListener {
+            copyTextToClipboard(getString(R.string.instructions_title), instructionsClipboardText())
+        }
+        binding.instructionsContent.setOnClickListener {
+            copyTextToClipboard(getString(R.string.instructions_title), instructionsClipboardText())
         }
 
         binding.refreshDevicesButton.setOnClickListener {
@@ -135,9 +163,21 @@ class MainActivity : AppCompatActivity() {
         val activeConfig = if (state.running) runningConfig else null
         val selected = selectedDevice()
 
-        binding.serviceStateValue.text = serviceStatusText(state)
-        binding.hostStatusValue.text = state.hostState.render(getString(R.string.host_label))
-        binding.targetStatusValue.text = state.targetState.render(getString(R.string.target_label))
+        applyStatusVisual(
+            binding.serviceStateValue,
+            serviceStatusText(state),
+            serviceStatusColorRes(state),
+        )
+        applyStatusVisual(
+            binding.hostStatusValue,
+            state.hostState.render(getString(R.string.host_label)),
+            endpointStatusColorRes(state.hostState.status),
+        )
+        applyStatusVisual(
+            binding.targetStatusValue,
+            state.targetState.render(getString(R.string.target_label)),
+            endpointStatusColorRes(state.targetState.status),
+        )
 
         binding.selectedDeviceValue.text = when {
             activeConfig != null -> "${activeConfig.deviceName}\n${activeConfig.deviceAddress}"
@@ -426,11 +466,81 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setInstructionsExpanded(expanded: Boolean) {
+        isInstructionsExpanded = expanded
+        binding.instructionsContent.isVisible = expanded
+        binding.instructionsToggleIcon.setImageResource(
+            if (expanded) R.drawable.ic_expand_more else R.drawable.ic_chevron_right,
+        )
+        binding.instructionsHeader.contentDescription = if (expanded) {
+            getString(R.string.instructions_section_collapse)
+        } else {
+            getString(R.string.instructions_section_expand)
+        }
+    }
+
     private fun setTcpPortTextIfNeeded(port: Int) {
         val expected = port.toString()
         if (binding.tcpPortEditText.text?.toString() != expected) {
             binding.tcpPortEditText.setText(expected)
         }
+    }
+
+    private fun copyTextToClipboard(label: String, text: String) {
+        if (text.isBlank()) {
+            return
+        }
+        val clipboardManager = getSystemService(ClipboardManager::class.java) ?: return
+        clipboardManager.setPrimaryClip(ClipData.newPlainText(label, text))
+        Toast.makeText(this, R.string.copied_to_clipboard, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun endpointClipboardText(): String {
+        return buildString {
+            appendLine("${getString(R.string.current_device_label)}：")
+            appendLine(binding.selectedDeviceValue.text)
+            appendLine()
+            appendLine("${getString(R.string.local_socket_label)}：")
+            appendLine(binding.localSocketValue.text)
+            appendLine()
+            appendLine("${getString(R.string.tcp_endpoint_label)}：")
+            append(binding.tcpEndpointValue.text)
+        }
+    }
+
+    private fun instructionsClipboardText(): String {
+        return binding.instructionsValue.text?.toString().orEmpty()
+    }
+
+    private fun serviceStatusColorRes(state: BridgeUiState): Int {
+        return when {
+            !state.running -> R.color.status_stopped
+            !state.lastError.isNullOrBlank() -> R.color.status_error
+            else -> R.color.status_connected
+        }
+    }
+
+    private fun endpointStatusColorRes(status: EndpointStatus): Int {
+        return when (status) {
+            EndpointStatus.CONNECTED -> R.color.status_connected
+            EndpointStatus.CONNECTING -> R.color.status_connecting
+            EndpointStatus.ERROR -> R.color.status_error
+            EndpointStatus.DISCONNECTED -> R.color.status_disconnected
+        }
+    }
+
+    private fun applyStatusVisual(
+        textView: TextView,
+        text: String,
+        @ColorRes colorRes: Int,
+    ) {
+        val color = ContextCompat.getColor(this, colorRes)
+        val icon = AppCompatResources.getDrawable(this, R.drawable.ic_status_circle)?.mutate()
+        icon?.let { DrawableCompat.setTint(it, color) }
+        textView.text = text
+        textView.setTextColor(color)
+        TextViewCompat.setCompoundDrawablesRelativeWithIntrinsicBounds(textView, icon, null, null, null)
+        textView.compoundDrawablePadding = (8 * resources.displayMetrics.density).toInt()
     }
 
     private fun missingPermissions(): List<String> {

@@ -18,6 +18,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -39,6 +40,7 @@ class BluetoothBridgeController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val hostQueue = Channel<HostConnection>(capacity = 1)
     private val hostReserved = AtomicBoolean(false)
+    private val stopRequested = AtomicBoolean(false)
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         context.getSystemService(BluetoothManager::class.java)?.adapter ?: BluetoothAdapter.getDefaultAdapter()
@@ -55,12 +57,14 @@ class BluetoothBridgeController(
         if (bridgeJob != null) {
             return
         }
+        stopRequested.set(false)
         bridgeJob = scope.launch {
             runBridgeLoop()
         }
     }
 
     fun stop() {
+        stopRequested.set(true)
         bridgeJob?.cancel()
         bridgeJob = null
         closeHostAcceptors()
@@ -186,13 +190,23 @@ class BluetoothBridgeController(
             }
 
             var socket: BluetoothSocket? = null
+            var connected = false
             try {
                 adapter.cancelDiscovery()
                 socket = device.createRfcommSocketToServiceRecord(BluetoothAdbBridgeService.ADB_BLUETOOTH_UUID)
+                currentTargetSocket = socket
                 socket.connect()
+                if (!scope.isActive || stopRequested.get()) {
+                    closeQuietly(socket)
+                    throw CancellationException("bridge stopped")
+                }
+                connected = true
                 return socket
             } catch (error: IOException) {
                 closeQuietly(socket)
+                if (!scope.isActive || stopRequested.get()) {
+                    throw CancellationException("bridge stopped")
+                }
                 BridgeStateStore.update {
                     it.copy(
                         running = true,
@@ -202,6 +216,10 @@ class BluetoothBridgeController(
                     )
                 }
                 delay(RETRY_DELAY_MS)
+            } finally {
+                if (!connected && currentTargetSocket === socket) {
+                    currentTargetSocket = null
+                }
             }
         }
         throw CancellationException("bridge stopped")
@@ -295,7 +313,7 @@ class BluetoothBridgeController(
         }
     }
 
-    private suspend fun pipeTraffic(host: HostConnection, target: BluetoothSocket) {
+    private suspend fun pipeTraffic(host: HostConnection, target: BluetoothSocket) = coroutineScope {
         val closeOnce = AtomicBoolean(false)
 
         fun closeAll() {
@@ -305,14 +323,14 @@ class BluetoothBridgeController(
             }
         }
 
-        val upstream = scope.launch {
+        val upstream = launch {
             try {
                 pump(host.inputStream(), target.outputStream)
             } finally {
                 closeAll()
             }
         }
-        val downstream = scope.launch {
+        val downstream = launch {
             try {
                 pump(target.inputStream, host.outputStream())
             } finally {
@@ -326,13 +344,20 @@ class BluetoothBridgeController(
 
     private fun pump(input: InputStream, output: OutputStream) {
         val buffer = ByteArray(16 * 1024)
-        while (true) {
-            val count = input.read(buffer)
-            if (count < 0) {
+        try {
+            while (scope.isActive && !stopRequested.get()) {
+                val count = input.read(buffer)
+                if (count < 0) {
+                    return
+                }
+                output.write(buffer, 0, count)
+                output.flush()
+            }
+        } catch (error: IOException) {
+            if (isExpectedClosure(error)) {
                 return
             }
-            output.write(buffer, 0, count)
-            output.flush()
+            throw error
         }
     }
 
@@ -368,6 +393,18 @@ class BluetoothBridgeController(
             is IOException -> error.message ?: "I/O 读写失败。"
             else -> error.message ?: error.javaClass.simpleName
         }
+    }
+
+    private fun isExpectedClosure(error: IOException): Boolean {
+        if (stopRequested.get() || !scope.isActive) {
+            return true
+        }
+        val message = error.message?.lowercase().orEmpty()
+        return message.contains("socket closed") ||
+            message.contains("bt socket closed") ||
+            message.contains("broken pipe") ||
+            message.contains("connection reset") ||
+            message.contains("read return: -1")
     }
 
     private fun hasBluetoothConnectPermission(): Boolean {
