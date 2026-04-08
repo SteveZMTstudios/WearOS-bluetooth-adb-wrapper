@@ -70,7 +70,11 @@
     <string name="error_handshake_failed">Сбой рукопожатия</string>
     <string name="error_tcp_port_in_use">TCP-порт %1$d уже занят.</string>
     <string name="error_bluetooth_access_denied">Система отклонила доступ к Bluetooth.</string>
+    
     <string name="error_connection_closed">Соединение закрыто.</string>
     <string name="error_socket_closed">Сокет закрыт.</string>
     <string name="error_io_failed">Ошибка ввода-вывода.</string>
+    <string name="watch_install_warning">Если в параметрах разработчика ваших часов есть возможность включить \"Отладка по Bluetooth\", то вы можете использовать этот инструмент напрямую на телефоне для отладки часов.\nЕсли ваши часы не поддерживают эту функцию, то установка этого приложения на часы тоже не поможет.</string>
+    <string name="open_on_phone">Открыть страницу скачивания на телефоне</string>
+    <string name="uninstall">Удалить с часов</string>
 </resources>

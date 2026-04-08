@@ -1,0 +1,5 @@
+A wrapper daemon app to manage Bluetooth ADB connections on WearOS devices.
+
+### Features
+- Manages secure ADB over Bluetooth connections on WearOS.
+- Simplifies the process of connecting and configuring wearable development options.

@@ -1,0 +1,1 @@
+Make WearOS 3 also support Bluetooth ADB debugging.

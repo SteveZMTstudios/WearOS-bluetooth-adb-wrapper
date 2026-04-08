@@ -25,10 +25,16 @@ import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.wear.remote.interactions.RemoteActivityHelper
+import androidx.concurrent.futures.await
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import com.google.android.material.color.DynamicColors
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import top.stevezmt.wearos.bluetoothadb.daemon.databinding.ActivityMainBinding
+import top.stevezmt.wearos.bluetoothadb.daemon.databinding.ActivityWatchMainBinding
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -57,6 +63,28 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         DynamicColors.applyToActivityIfAvailable(this)
         super.onCreate(savedInstanceState)
+        
+        if (packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)) {
+            val watchBinding = ActivityWatchMainBinding.inflate(layoutInflater)
+            setContentView(watchBinding.root)
+            
+            watchBinding.btnOpenPhone.setOnClickListener {
+                val remoteActivityHelper = RemoteActivityHelper(this)
+                val intent = Intent(Intent.ACTION_VIEW)
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .setData(Uri.parse("https://github.com/SteveZMTstudios/WearOS-bluetooth-adb-wrapper/releases/latest"))
+                remoteActivityHelper.startRemoteActivity(intent)
+            }
+            
+            watchBinding.btnUninstall.setOnClickListener {
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", packageName, null)
+                }
+                startActivity(intent)
+            }
+            return
+        }
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -80,6 +108,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)) return
         refreshBondedDevices()
     }
 
