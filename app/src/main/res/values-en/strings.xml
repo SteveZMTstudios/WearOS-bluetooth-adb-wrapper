@@ -73,4 +73,7 @@
     <string name="error_connection_closed">Connection closed.</string>
     <string name="error_socket_closed">Socket closed.</string>
     <string name="error_io_failed">I/O read/write failed.</string>
+    <string name="watch_install_warning">If your watch\'s developer options have the ability to turn on \"Debug over Bluetooth\", then you can use this tool directly on your phone to debug the watch.\n If your watch does not support this feature, then installing this app on the watch won\'t help either.</string>
+    <string name="open_on_phone">Open download page on phone</string>
+    <string name="uninstall">Uninstall from watch</string>
 </resources>

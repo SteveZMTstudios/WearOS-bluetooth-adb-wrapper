@@ -73,4 +73,7 @@
     <string name="error_connection_closed">连接已关闭。</string>
     <string name="error_socket_closed">套接字已关闭。</string>
     <string name="error_io_failed">I/O 读写失败。</string>
+    <string name="watch_install_warning">如果您的手表的开发者选项中能够打开“通过蓝牙调试”，那么您就可以直接在手机上借助此工具来调试手表。\n如果您的手表不支持此功能，那么在手表上安装此应用也无济于事。</string>
+    <string name="open_on_phone">在手机上打开下载页面</string>
+    <string name="uninstall">在手表上卸载</string>
 </resources>
