@@ -171,7 +171,6 @@ class BluetoothAdbBridgeService : Service() {
             return
         }
         Log.i(TAG, "request async stop bridge")
-        prefs.setKeepRunning(false)
         if (BridgeStateStore.state.value.running || controller != null) {
             BridgeStateStore.update {
                 it.copy(
@@ -181,32 +180,21 @@ class BluetoothAdbBridgeService : Service() {
                 )
             }
         }
-        val existing = controller
-        if (existing == null) {
-            finalizeStoppedState()
-            stopSelf()
-            return
-        }
         stopJob = serviceScope.launch {
             try {
                 operationMutex.withLock {
-                    val stopped = withTimeoutOrNull(STOP_JOIN_TIMEOUT_MS) {
-                        withControllerStop(existing)
-                    } != null
-                    if (stopped) {
-                        controller = null
+                    prefs.setKeepRunning(false)
+                    val existing = controller
+                    if (existing == null) {
                         finalizeStoppedState()
                         stopSelf()
-                    } else {
-                        Log.w(TAG, "stop service bridge timed out")
-                        BridgeStateStore.update {
-                            it.copy(
-                                running = true,
-                                serviceStatus = ServiceStatus.STOPPING,
-                                lastError = getString(R.string.service_stop_timeout),
-                            )
-                        }
+                        return@withLock
                     }
+                    
+                    withControllerStop(existing)
+                    controller = null
+                    finalizeStoppedState()
+                    stopSelf()
                 }
             } finally {
                 stopJob = null
@@ -216,9 +204,9 @@ class BluetoothAdbBridgeService : Service() {
 
     private fun forceStopBridge() {
         Log.w(TAG, "force stop service bridge")
-        prefs.setKeepRunning(false)
         stopJob?.cancel()
         stopJob = null
+        prefs.setKeepRunning(false)
         controller?.stop()
         controller = null
         finalizeStoppedState()
@@ -327,7 +315,6 @@ class BluetoothAdbBridgeService : Service() {
 
     companion object {
         private const val TAG = "BtAdbService"
-        private const val STOP_JOIN_TIMEOUT_MS = 3_000L
         const val ACTION_START = "top.stevezmt.wearos.bluetoothadb.daemon.action.START"
         const val ACTION_STOP = "top.stevezmt.wearos.bluetoothadb.daemon.action.STOP"
         const val ACTION_FORCE_STOP = "top.stevezmt.wearos.bluetoothadb.daemon.action.FORCE_STOP"

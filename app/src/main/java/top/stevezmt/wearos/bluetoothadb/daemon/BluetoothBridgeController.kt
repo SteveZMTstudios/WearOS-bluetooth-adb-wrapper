@@ -42,6 +42,7 @@ class BluetoothBridgeController(
     private val hostQueue = Channel<HostConnection>(capacity = 1)
     private val hostReserved = AtomicBoolean(false)
     private val stopRequested = AtomicBoolean(false)
+    private val socketLock = Any()
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         context.getSystemService(BluetoothManager::class.java)?.adapter ?: BluetoothAdapter.getDefaultAdapter()
@@ -227,7 +228,13 @@ class BluetoothBridgeController(
             try {
                 adapter.cancelDiscovery()
                 socket = device.createRfcommSocketToServiceRecord(BluetoothAdbBridgeService.ADB_BLUETOOTH_UUID)
-                currentTargetSocket = socket
+                synchronized(socketLock) {
+                    if (!scope.isActive || stopRequested.get()) {
+                        closeQuietly(socket)
+                        throw CancellationException("bridge stopped")
+                    }
+                    currentTargetSocket = socket
+                }
                 Log.d(TAG, "connecting target device=${config.deviceName} address=${config.deviceAddress}")
                 socket.connect()
                 if (!scope.isActive || stopRequested.get()) {
@@ -415,14 +422,34 @@ class BluetoothBridgeController(
     }
 
     private fun closeHostAcceptors() {
+        val oldLocal = localServerSocket
+        val oldTcp = tcpServerSocket
+
         localAcceptJob?.cancel()
         localAcceptJob = null
         tcpAcceptJob?.cancel()
         tcpAcceptJob = null
-        closeQuietly(localServerSocket)
+        
         localServerSocket = null
-        closeQuietly(tcpServerSocket)
+        closeQuietly(oldLocal)
+        
         tcpServerSocket = null
+        closeQuietly(oldTcp)
+        
+        // Wake up any blocked `accept()` call so the Android framework doesn't leak the socket binding or hang the coroutine
+        if (oldLocal != null) {
+            try {
+                android.net.LocalSocket().apply {
+                    connect(android.net.LocalSocketAddress(BluetoothAdbBridgeService.LOCAL_SOCKET_NAME))
+                    close()
+                }
+            } catch (_: Exception) {}
+        }
+        if (oldTcp != null) {
+            try {
+                java.net.Socket("127.0.0.1", config.tcpPort).close()
+            } catch (_: Exception) {}
+        }
     }
 
     private fun closePendingHosts() {
@@ -472,8 +499,10 @@ class BluetoothBridgeController(
         closeHostAcceptors()
         closeQuietly(currentHostConnection)
         currentHostConnection = null
-        closeQuietly(currentTargetSocket)
-        currentTargetSocket = null
+        synchronized(socketLock) {
+            closeQuietly(currentTargetSocket)
+            currentTargetSocket = null
+        }
         closePendingHosts()
         scope.cancel()
         bridgeJob = null
