@@ -1,1 +1,1 @@
-WearOS 蓝牙 ADB 守护进程应用
+用来补回 WearOS 3 缺失的侧蓝牙 ADB 桥接能力。

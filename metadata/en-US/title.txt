@@ -1,1 +1,1 @@
-WearOS Bluetooth ADB Wrapper
+WearOS Bluetooth ADB Bridge

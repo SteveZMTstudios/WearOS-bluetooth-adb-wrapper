@@ -1,5 +1,17 @@
-A wrapper daemon app to manage Bluetooth ADB connections on WearOS devices.
+A foreground service application installed on your phone to restore the missing Bluetooth ADB bridge capability for WearOS 3 devices.
 
-### Features
-- Manages secure ADB over Bluetooth connections on WearOS.
-- Simplifies the process of connecting and configuring wearable development options.
+While the watch still uses the "Debug over Bluetooth" setting in the system settings, this app handles the phone side. By launching this app on your phone, you can easily select a paired watch, initiate an RFCOMM Bluetooth handshake, and expose the adb-hub locally.
+
+Key Features:
+• Select target watch from paired Bluetooth devices on your phone.
+• Foreground service runs in the background to sustain the bridge logic.
+• Optional TCP listening port (default is 44444, customizable from 1 to 65535).
+• Three-way status display for service, host, and target, differentiated by colors.
+• Endpoint information and connection commands are collapsible and can be copied to the clipboard with one tap.
+• Clear error handling for connection failures, port occupations, and missing permissions.
+
+Connecting to the watch:
+1. Classic ADB Hub: The app creates a local abstract socket (localabstract:/adb-hub). You can use adb forward to connect.
+2. TCP Listener: When enabled, the app listens on the specified port. Other tools on your phone (like Termux) or devices on your local network can connect to the watch directly via IP address without Wi-Fi.
+
+Note: WearOS versions after WearOS 3 completely removed Bluetooth debugging. This tool can only be used on versions between WearOS 2 and 3. If your watch's developer options do not have "Debug over Bluetooth", your system version is not supported.

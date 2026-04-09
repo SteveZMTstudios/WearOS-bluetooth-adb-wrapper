@@ -1,1 +1,1 @@
-WearOS Bluetooth ADB Менеджер
+Мост Bluetooth Debug для WearOS
