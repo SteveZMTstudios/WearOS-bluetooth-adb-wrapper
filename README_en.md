@@ -15,7 +15,7 @@ On the watch side, keep using the system setting "Debug over Bluetooth". This ap
 > [!WARNING]
 > Bluetooth debugging was fully removed in versions after WearOS 3.
 > This tool only works on WearOS versions between 2 and 3. 🤦
-> If your watch Developer Options does not contain "Debug over Bluetooth", your system version is not supported.
+> (but we are not sure about that!)
 
 ## Current Features
 
